@@ -1,0 +1,10 @@
+## Tips ##
+
+1. You don't need to use multiple threads (but you are welcome to). The nice thing about NIO is that it does all multi-threading needed to handle I/O under the covers for you.
+2. Think event/action protocol like we see in class and in the slides. NIO's handleResponse methods are perfectly suited to that type of design. Write down your protocol carefully on paper first in event/action form and "debug" that first. It's a lot easier than debugging code. There is no easy way to debug a distributed system using a debugger in the traditional way as concurrency effects are not easily reproducible, i.e., a debugger ends up changing the very thing you are trying to see.
+4. Play with the Grader yourself, i.e., increase the number of requests, threads, servers, etc. to stress test your system yourself. As always, the tests provided to you are a good baseline, i.e., if your code passes those tests, it is likely correct. But tests are never meant to be exhaustive, e.g., we may test your code with more stress or on different physical machines, etc. So it is important for your underlying design to be correct.
+5. Do not use System.currentTimeMillis() or System.nanoTime() or such. You can not assume a globally synchronized clock in a distributed system. Your code should work correctly even if we test it on different physical machines.
+6. You can rest assured that there will be no process failures in the test environment. The assignment is only testing consistency, not fault tolerance.
+7. You can NOT assume FIFO delivery, i.e., you can not assume that handleResponse(m1) will be called before handleResponse(m2) at a given receiving node even if m1 was sent before m2 and both were sent by the same sender. This is true even though we use TCP because of the multithreaded nature of the underlying nio library.
+
+(More to be added if/as needed.)

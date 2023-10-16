@@ -4,7 +4,6 @@ import com.datastax.driver.core.Cluster;
 import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.Row;
 import com.datastax.driver.core.Session;
-import com.gradescope.jh61b.grader.GradedTest;
 import edu.umass.cs.nio.interfaces.NodeConfig;
 import edu.umass.cs.nio.nioutils.NIOHeader;
 import edu.umass.cs.nio.nioutils.NodeConfigUtils;
@@ -91,7 +90,6 @@ public class GraderSingleServer extends DefaultTest {
      * @throws InterruptedException
      */
     @Test
-    @GradedTest(name = "test01_DefaultAsync()", max_score = 10)
     public void test01_DefaultAsync() throws IOException,
             InterruptedException {
         client.send(DEFAULT_SADDR, "select table_name from system_schema" +
@@ -107,7 +105,6 @@ public class GraderSingleServer extends DefaultTest {
      * @throws InterruptedException
      */
     @Test
-    @GradedTest(name = "test02_Single_CreateTable_Async()", max_score = 10)
     public void test02_Single_CreateTable_Async() throws IOException,
             InterruptedException {
         dropTableIfExists();
@@ -125,7 +122,6 @@ public class GraderSingleServer extends DefaultTest {
      * @throws InterruptedException
      */
     @Test
-    @GradedTest(name = "test03_InsertRecords_Async()", max_score = 10)
     public void test03_InsertRecords_Async() throws IOException, InterruptedException {
         int numInserts = 10;
         clearTableRecords();
@@ -146,7 +142,6 @@ public class GraderSingleServer extends DefaultTest {
      * @throws InterruptedException
      */
     @Test
-    @GradedTest(name = "test04_DeleteRecords_Async()", max_score = 10)
     public void test04_DeleteRecords_Async() throws IOException, InterruptedException {
         send("truncate users", true);
         Thread.sleep(SLEEP);
@@ -166,7 +161,6 @@ public class GraderSingleServer extends DefaultTest {
      * @throws InterruptedException
      */
     @Test
-    @GradedTest(name = "test05_CreateTable_Sync()", max_score = 10)
     public void test05_CreateTable_Sync() throws IOException, InterruptedException {
         session.execute(getDropTableCmd(TABLE, DEFAULT_KEYSPACE));
         testCreateTable(true, false);

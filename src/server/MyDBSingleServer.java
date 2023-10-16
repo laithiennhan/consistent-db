@@ -31,18 +31,18 @@ public class MyDBSingleServer extends SingleServer {
     protected void handleMessageFromClient(byte[] bytes, NIOHeader header) {
         String request = new String(bytes);
         String response;
-
+        String[] parts = request.split(":::", 2);
+        String actualRequest = parts[0];
+        String requestID = "";
+        if (parts.length >= 2) {
+            requestID = parts[1];
+        }
         try {
-            ResultSet results = session.execute(request);
-            // For simplicity, just returning the first row as response
-            if (!results.isExhausted()) {
-                Row row = results.one();
-                response = row.toString();
-            } else {
-                response = "Operation executed successfully, but no data to return.";
-            }
+
+            session.execute(actualRequest);
+            response = "success:::" + requestID;
         } catch (Exception e) {
-            response = "Error executing operation: " + e.getMessage();
+            response = "failed:::" + requestID;
         }
 
         try {

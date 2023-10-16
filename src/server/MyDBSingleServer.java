@@ -38,7 +38,6 @@ public class MyDBSingleServer extends SingleServer {
             requestID = parts[1];
         }
         try {
-
             session.execute(actualRequest);
             response = "success:::" + requestID;
         } catch (Exception e) {

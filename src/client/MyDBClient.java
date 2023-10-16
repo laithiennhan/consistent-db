@@ -46,9 +46,13 @@ public class MyDBClient extends Client {
 
     @Override
     public void callbackSend(InetSocketAddress isa, String request, Callback callback) throws IOException {
-        String requestID = String.valueOf(System.currentTimeMillis());
-        String modifiedRequest = request + ":::" + requestID;
-        callbackMap.put(requestID, callback);
-        send(isa, modifiedRequest);
+        try {
+            String requestID = String.valueOf(System.currentTimeMillis());
+            String modifiedRequest = request + ":::" + requestID;
+            callbackMap.put(requestID, callback);
+            send(isa, modifiedRequest);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 }

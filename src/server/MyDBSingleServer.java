@@ -27,8 +27,10 @@ public class MyDBSingleServer extends SingleServer {
     public MyDBSingleServer(InetSocketAddress isa, InetSocketAddress isaDB,
                             String keyspace) throws IOException {
         super(isa, isaDB, keyspace);
-        session = (cluster=Cluster.builder().addContactPoint("127.0.0.1")
-                .build()).connect("demo");
+        // session = (cluster=Cluster.builder().addContactPoint("127.0.0.1")
+        //         .build()).connect("demo");
+        this.cluster = Cluster.builder().addContactPoint(isaDB.getHostName()).withPort(isaDB.getPort()).build();
+        this.session = cluster.connect(keyspace);
     }
 
     @Override

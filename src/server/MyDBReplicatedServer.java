@@ -58,12 +58,22 @@ public class MyDBReplicatedServer extends SingleServer {
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
+        // Broadcast intent to send message to other servers
+        // Wait for all other ACKs with timestamps
+        // Select highest proposed timestamp
+        // Deliver message with timestamp selected above to other servers
+        // Push message with timestamp selected above to priority queue
     }
 
     // TODO: process bytes received from servers here
     protected void handleMessageFromServer(byte[] bytes, NIOHeader header) {
         log.log(Level.INFO, "{0} received relayed message from {1}",
                 new Object[]{this.myID, header.sndr}); // simply log
+        
+        // When receive intent: increment clock and send ACK with local clock counter
+        // When receive message: adjust timestamp (Lamport algo cai max cua e Thinh), increment clock and add message + timestamp to priority queue
+
+
     }
 
     public void close() {

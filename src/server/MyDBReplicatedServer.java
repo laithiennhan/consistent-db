@@ -25,17 +25,26 @@ import com.datastax.driver.core.*;
 public class MyDBReplicatedServer extends SingleServer {
 
     protected final String myID;
-    protected final MessageNIOTransport<String,String> serverMessenger;
+    protected final MessageNIOTransport<String, String> serverMessenger;
     final private Session session;
     final private Cluster cluster;
     private final AtomicInteger lamportClock = new AtomicInteger(0);
     private final PriorityBlockingQueue<Message> queue = new PriorityBlockingQueue<>();
     private final Map<String, Integer> ackMap = new ConcurrentHashMap<>();
+    // key: sender node id, value: expected seq
+    private final Map<String, Integer> sequenceMap = new ConcurrentHashMap<>();
+    // store commands yet to be executed
+    private final Map<String, PriorityBlockingQueue<Message>> buffer = new ConcurrentHashMap<>();
+    // sequence number currently in this node:
+    private final AtomicInteger sequence = new AtomicInteger(0);
+
     // Represent a message with its Lamport timestamp.
     private static class Message implements Comparable<Message> {
         byte[] content;
         int timestamp;
         String uniqueID;
+        int senderSequence;
+
         @Override
         public int compareTo(Message other) {
             return Integer.compare(this.timestamp, other.timestamp);
@@ -43,24 +52,30 @@ public class MyDBReplicatedServer extends SingleServer {
     }
 
     public MyDBReplicatedServer(NodeConfig<String> nodeConfig, String myID,
-                                InetSocketAddress isaDB) throws IOException {
+            InetSocketAddress isaDB) throws IOException {
         super(new InetSocketAddress(nodeConfig.getNodeAddress(myID),
-                nodeConfig.getNodePort(myID)-ReplicatedServer
-                        .SERVER_PORT_OFFSET), isaDB, myID);
+                nodeConfig.getNodePort(myID) - ReplicatedServer.SERVER_PORT_OFFSET), isaDB, myID);
         this.myID = myID;
-        this.serverMessenger = new
-                MessageNIOTransport<String, String>(myID, nodeConfig,
-                new
-                        AbstractBytePacketDemultiplexer() {
-                            @Override
-                            public boolean handleMessage(byte[] bytes, NIOHeader nioHeader) {
-                                handleMessageFromServer(bytes, nioHeader);
-                                return true;
-                            }
-                        }, true);
+        this.serverMessenger = new MessageNIOTransport<String, String>(myID, nodeConfig,
+                new AbstractBytePacketDemultiplexer() {
+                    @Override
+                    public boolean handleMessage(byte[] bytes, NIOHeader nioHeader) {
+                        handleMessageFromServer(bytes, nioHeader);
+                        return true;
+                    }
+                }, true);
         this.cluster = Cluster.builder().addContactPoint(isaDB.getHostName()).withPort(isaDB.getPort()).build();
         this.session = cluster.connect(myID);
-        log.log(Level.INFO, "Server {0} started on {1}", new Object[]{this.myID, this.clientMessenger.getListeningSocketAddress()});
+
+        // initialize the sequence map
+        for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
+            // if (!node.equals(myID))
+            sequenceMap.put(node, 0);
+            buffer.put(node, new PriorityBlockingQueue<Message>());
+        }
+
+        log.log(Level.INFO, "Server {0} started on {1}",
+                new Object[] { this.myID, this.clientMessenger.getListeningSocketAddress() });
     }
 
     // Message type enum
@@ -87,27 +102,79 @@ public class MyDBReplicatedServer extends SingleServer {
         // multicast the update to all other servers
         for (String node : this.serverMessenger.getNodeConfig().getNodeIDs())
             // if (!node.equals(myID))
-                try {
-                    this.serverMessenger.send(node, createMulticastMessage(bytes, ts, uniqueID));
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+            try {
+                this.serverMessenger.send(node, createMulticastMessage(bytes, ts, uniqueID));
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
     }
 
     // TODO: process bytes received from servers here
     protected void handleMessageFromServer(byte[] bytes, NIOHeader header) {
         log.log(Level.INFO, "{0} received relayed message from {1}",
-                new Object[]{this.myID, header.sndr}); // simply log
-        MessageType type = getMessageType(bytes);
+                new Object[] { this.myID, header.sndr }); // simply log
 
-        switch (type) {
-            case MULTICAST_UPDATE:
-                handleMulticastUpdate(bytes);
-                break;
-            case MULTICAST_ACK:
-                handleMulticastAck(bytes);
-                break;
+        MessageType type = getMessageType(bytes);
+        int senderSequence;
+        String senderId;
+        JSONObject jsonObject = null;
+        try {
+            jsonObject = new JSONObject(new String(bytes));
+            senderSequence = Integer.parseInt(jsonObject.getString("sequenceNumber"));
+            senderId = jsonObject.getString("senderId");
+            int receivedTimestamp = jsonObject.getInt("timestamp");
+            String messageID = jsonObject.getString("messageID");
+            int expectedSequence = sequenceMap.get(senderId);
+            byte[] payload = jsonObject.getString("payload").getBytes();
+            String uniqueID = jsonObject.getString("uniqueID");
+            if (senderSequence != expectedSequence) {
+                Message message = new Message();
+                message.content = payload;
+                message.timestamp = receivedTimestamp;
+                message.senderSequence = senderSequence;
+                message.uniqueID = uniqueID;
+                buffer.get(senderId).add(message);
+
+            } else {
+                switch (type) {
+                    case MULTICAST_UPDATE:
+                        handleMulticastUpdate(bytes);
+                        break;
+                    case MULTICAST_ACK:
+                        handleMulticastAck(bytes);
+                        break;
+                }
+                expectedSequence++;
+                sequenceMap.put(senderId, expectedSequence);
+                while (!buffer.get(senderId).isEmpty() && buffer.get(senderId).peek().senderSequence == expectedSequence) {
+                    Message nextMessage = buffer.get(senderId).poll();
+                    byte[] nextBytes = nextMessage.content;
+                    MessageType nextType = getMessageType(nextBytes);
+                    switch (nextType) {
+                        case MULTICAST_UPDATE:
+                            handleMulticastUpdate(nextBytes);
+                            break;
+                        case MULTICAST_ACK:
+                            handleMulticastAck(nextBytes);
+                            break;
+                    }
+                    expectedSequence++;
+                    sequenceMap.put(senderId, expectedSequence);
+                }
+
+            }
+        } catch (JSONException e) {
+            // e.printStackTrace();
         }
+
+        // switch (type) {
+        // case MULTICAST_UPDATE:
+        // handleMulticastUpdate(bytes);
+        // break;
+        // case MULTICAST_ACK:
+        // handleMulticastAck(bytes);
+        // break;
+        // }
     }
 
     private void handleMulticastUpdate(byte[] bytes) {
@@ -138,11 +205,11 @@ public class MyDBReplicatedServer extends SingleServer {
         // multicast acknowledgment to all nodes
         for (String node : this.serverMessenger.getNodeConfig().getNodeIDs())
             // if (!node.equals(myID)) multicast to all nodes including itself
-                try {
-                    this.serverMessenger.send(node, createAckMessage(message.content, tsAck, messageID));
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+            try {
+                this.serverMessenger.send(node, createAckMessage(message.content, tsAck, messageID));
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
     }
 
     private void handleMulticastAck(byte[] bytes) {
@@ -206,6 +273,8 @@ public class MyDBReplicatedServer extends SingleServer {
             jsonObject.put("payload", new String(content));
             jsonObject.put("timestamp", timestamp);
             jsonObject.put("messageID", messageID);
+            jsonObject.put("senderID", myID);
+            jsonObject.put("sequenceNumber", sequence.getAndIncrement());
             return jsonObject.toString().getBytes();
         } catch (JSONException e) {
             // e.printStackTrace();
@@ -220,6 +289,8 @@ public class MyDBReplicatedServer extends SingleServer {
             jsonObject.put("payload", new String(content));
             jsonObject.put("timestamp", timestamp);
             jsonObject.put("messageID", messageID);
+            jsonObject.put("senderID", myID);
+            jsonObject.put("sequenceNumber", sequence.getAndIncrement());
             return jsonObject.toString().getBytes();
         } catch (JSONException e) {
             // e.printStackTrace();

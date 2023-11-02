@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
-
+import java.util.UUID;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -35,7 +35,7 @@ public class MyDBReplicatedServer extends SingleServer {
     private static class Message implements Comparable<Message> {
         byte[] content;
         int timestamp;
-
+        String uniqueID;
         @Override
         public int compareTo(Message other) {
             return Integer.compare(this.timestamp, other.timestamp);
@@ -77,17 +77,18 @@ public class MyDBReplicatedServer extends SingleServer {
 
         int ts = lamportClock.incrementAndGet();
 
-        Message message = new Message();
-        message.content = bytes;
-        message.timestamp = ts;
-
-        ackMap.put(new String(bytes), 1); // Acknowledgment from this server
-
+        // Message message = new Message();
+        // message.content = bytes;
+        // message.timestamp = ts;
+        // message.uniqueID = uniqueID;
+        // ackMap.put(new String(bytes), 1); // Acknowledgment from this server
+        String uniqueID = UUID.randomUUID().toString();
+        ackMap.put(uniqueID, 0); // Acknowledgment from this server
         // multicast the update to all other servers
         for (String node : this.serverMessenger.getNodeConfig().getNodeIDs())
             // if (!node.equals(myID))
                 try {
-                    this.serverMessenger.send(node, createMulticastMessage(bytes, ts));
+                    this.serverMessenger.send(node, createMulticastMessage(bytes, ts, uniqueID));
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
@@ -112,9 +113,11 @@ public class MyDBReplicatedServer extends SingleServer {
     private void handleMulticastUpdate(byte[] bytes) {
         int receivedTimestamp = 0;
         JSONObject jsonObject = null;
+        String messageID = "";
         try {
             jsonObject = new JSONObject(new String(bytes));
             receivedTimestamp = jsonObject.getInt("timestamp");
+            messageID = jsonObject.getString("messageID");
         } catch (JSONException e) {
             // e.printStackTrace();
         }
@@ -128,7 +131,7 @@ public class MyDBReplicatedServer extends SingleServer {
             // e.printStackTrace();
         }
         message.timestamp = receivedTimestamp;
-
+        message.uniqueID = messageID;
         queue.add(message);
 
         int tsAck = lamportClock.incrementAndGet();
@@ -136,7 +139,7 @@ public class MyDBReplicatedServer extends SingleServer {
         for (String node : this.serverMessenger.getNodeConfig().getNodeIDs())
             // if (!node.equals(myID)) multicast to all nodes including itself
                 try {
-                    this.serverMessenger.send(node, createAckMessage(message.content, tsAck));
+                    this.serverMessenger.send(node, createAckMessage(message.content, tsAck, messageID));
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
@@ -152,15 +155,17 @@ public class MyDBReplicatedServer extends SingleServer {
             // e.printStackTrace();
         }
 
-        lamportClock.set(Math.max(lamportClock.get(), receivedTimestamp) + 1);
+        lamportClock.set(Math.max(lamportClock.get(), receivedTimestamp + 1));
 
-        String originalMessage = "";
+        // String originalMessage = "";
+        String messageID = "";
         try {
-            originalMessage = jsonObject.getString("payload");
+            // originalMessage = jsonObject.getString("payload");
+            messageID = jsonObject.getString("messageID");
         } catch (JSONException e) {
             // e.printStackTrace();
         }
-        ackMap.put(originalMessage, ackMap.getOrDefault(originalMessage, 0) + 1);
+        ackMap.put(messageID, ackMap.getOrDefault(messageID, 0) + 1);
 
         if (allAcksReceivedFor(queue.peek())) {
             deliver(queue.poll());
@@ -172,8 +177,9 @@ public class MyDBReplicatedServer extends SingleServer {
             return false;
         }
 
-        String originalMessage = new String(message.content);
-        int ackCount = ackMap.getOrDefault(originalMessage, 0);
+        // String originalMessage = new String(message.content);
+        String messageID = message.uniqueID;
+        int ackCount = ackMap.getOrDefault(messageID, 0);
         return ackCount == this.serverMessenger.getNodeConfig().getNodeIDs().size();
     }
 
@@ -193,12 +199,13 @@ public class MyDBReplicatedServer extends SingleServer {
         return null;
     }
 
-    private byte[] createMulticastMessage(byte[] content, int timestamp) {
+    private byte[] createMulticastMessage(byte[] content, int timestamp, String messageID) {
         try {
             JSONObject jsonObject = new JSONObject();
-            jsonObject.put("type", MessageType.MULTICAST_UPDATE.name());
+            jsonObject.put("type", MessageType.MULTICAST_UPDATE.toString());
             jsonObject.put("payload", new String(content));
             jsonObject.put("timestamp", timestamp);
+            jsonObject.put("messageID", messageID);
             return jsonObject.toString().getBytes();
         } catch (JSONException e) {
             // e.printStackTrace();
@@ -206,13 +213,13 @@ public class MyDBReplicatedServer extends SingleServer {
         return null;
     }
 
-    private byte[] createAckMessage(byte[] content, int timestamp) {
+    private byte[] createAckMessage(byte[] content, int timestamp, String messageID) {
         try {
             JSONObject jsonObject = new JSONObject();
-            jsonObject.put("type", MessageType.MULTICAST_ACK.name());
+            jsonObject.put("type", MessageType.MULTICAST_ACK.toString());
             jsonObject.put("payload", new String(content));
             jsonObject.put("timestamp", timestamp);
-
+            jsonObject.put("messageID", messageID);
             return jsonObject.toString().getBytes();
         } catch (JSONException e) {
             // e.printStackTrace();

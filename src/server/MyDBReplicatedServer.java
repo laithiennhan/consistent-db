@@ -44,6 +44,7 @@ public class MyDBReplicatedServer extends SingleServer {
         int timestamp;
         String uniqueID;
         int senderSequence;
+        MessageType type;
 
         @Override
         public int compareTo(Message other) {
@@ -74,8 +75,8 @@ public class MyDBReplicatedServer extends SingleServer {
             buffer.put(node, new PriorityBlockingQueue<Message>());
         }
 
-        log.log(Level.INFO, "Server {0} started on {1}",
-                new Object[] { this.myID, this.clientMessenger.getListeningSocketAddress() });
+        // log.log(Level.INFO, "Server {0} started on {1}",
+        //         new Object[] { this.myID, this.clientMessenger.getListeningSocketAddress() });
     }
 
     // Message type enum
@@ -100,81 +101,109 @@ public class MyDBReplicatedServer extends SingleServer {
         String uniqueID = UUID.randomUUID().toString();
         ackMap.put(uniqueID, 0); // Acknowledgment from this server
         // multicast the update to all other servers
-        for (String node : this.serverMessenger.getNodeConfig().getNodeIDs())
+        for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
             // if (!node.equals(myID))
             try {
                 this.serverMessenger.send(node, createMulticastMessage(bytes, ts, uniqueID));
             } catch (IOException e) {
                 e.printStackTrace();
             }
+        }
+        sequence.getAndIncrement();
     }
 
     // TODO: process bytes received from servers here
     protected void handleMessageFromServer(byte[] bytes, NIOHeader header) {
-        log.log(Level.INFO, "{0} received relayed message from {1}",
+        log.log(Level.INFO, "At hmfs, {0} received relayed message from {1}",
                 new Object[] { this.myID, header.sndr }); // simply log
 
         MessageType type = getMessageType(bytes);
         int senderSequence;
-        String senderId;
+        String senderID;
         JSONObject jsonObject = null;
         try {
             jsonObject = new JSONObject(new String(bytes));
-            senderSequence = Integer.parseInt(jsonObject.getString("sequenceNumber"));
-            senderId = jsonObject.getString("senderId");
+            senderSequence = jsonObject.getInt("sequenceNumber");
+            // senderSequence = Integer.parseInt(jsonObject.getString("sequenceNumber"));
+            senderID = jsonObject.getString("senderID");
             int receivedTimestamp = jsonObject.getInt("timestamp");
             String messageID = jsonObject.getString("messageID");
-            int expectedSequence = sequenceMap.get(senderId);
+            int expectedSequence = sequenceMap.get(senderID);
             byte[] payload = jsonObject.getString("payload").getBytes();
-            String uniqueID = jsonObject.getString("uniqueID");
-            if (senderSequence != expectedSequence) {
-                Message message = new Message();
-                message.content = payload;
-                message.timestamp = receivedTimestamp;
-                message.senderSequence = senderSequence;
-                message.uniqueID = uniqueID;
-                buffer.get(senderId).add(message);
+            // String uniqueID = jsonObject.getString("uniqueID");
+            // log.log(Level.INFO, "Sender Sequence: {0}, Expected sequence: {1}, SenderID: {2}, MyID: {3}",
+            //         new Object[] { senderSequence, expectedSequence, senderID, myID}); // simply log
+            // if (senderSequence != expectedSequence) {
+            //     Message message = new Message();
+            //     message.content = payload;
+            //     message.timestamp = receivedTimestamp;
+            //     message.senderSequence = senderSequence;
+            //     message.uniqueID = messageID;
+            //     message.type = type;
+            //     buffer.get(senderID).add(message);
+            // } else {
+            //     switch (type) {
+            //         case MULTICAST_UPDATE:
+            //             handleMulticastUpdate(bytes);
+            //             break;
+            //         case MULTICAST_ACK:
+            //             handleMulticastAck(bytes);
+            //             break;
+            //     }
+            //     expectedSequence++;
+            //     sequenceMap.put(senderID, expectedSequence);
+            //     while (!buffer.get(senderID).isEmpty() && buffer.get(senderID).peek().senderSequence == expectedSequence) {
+            //         Message nextMessage = buffer.get(senderID).poll();
+            //         // byte[] nextBytes = nextMessage.content;
+            //         // MessageType nextType = getMessageType(nextBytes);
+            //         JSONObject nextJSONObject = new JSONObject();
+            //         nextJSONObject.put("type", nextMessage.type.toString());
+            //         nextJSONObject.put("payload", new String(nextMessage.content));
+            //         nextJSONObject.put("timestamp", nextMessage.timestamp);
+            //         nextJSONObject.put("messageID", nextMessage.uniqueID);
+            //         switch (nextMessage.type) {
+            //             case MULTICAST_UPDATE:
+            //                 handleMulticastUpdate(nextJSONObject.toString().getBytes());
+            //                 break;
+            //             case MULTICAST_ACK:
+            //                 handleMulticastAck(nextJSONObject.toString().getBytes());
+            //                 break;
+            //         }
+            //         expectedSequence++;
+            //         sequenceMap.put(senderID, expectedSequence);
+            //     }
+            // }
 
-            } else {
-                switch (type) {
+            Message message = new Message();
+            message.content = payload;
+            message.timestamp = receivedTimestamp;
+            message.senderSequence = senderSequence;
+            message.uniqueID = messageID;
+            message.type = type;
+            buffer.get(senderID).add(message);
+
+            while (!buffer.get(senderID).isEmpty() && buffer.get(senderID).peek().senderSequence == sequenceMap.get(senderID)) {
+                Message nextMessage = buffer.get(senderID).poll();
+                // byte[] nextBytes = nextMessage.content;
+                // MessageType nextType = getMessageType(nextBytes);
+                JSONObject nextJSONObject = new JSONObject();
+                nextJSONObject.put("type", nextMessage.type.toString());
+                nextJSONObject.put("payload", new String(nextMessage.content));
+                nextJSONObject.put("timestamp", nextMessage.timestamp);
+                nextJSONObject.put("messageID", nextMessage.uniqueID);
+                switch (nextMessage.type) {
                     case MULTICAST_UPDATE:
-                        handleMulticastUpdate(bytes);
+                        handleMulticastUpdate(nextJSONObject.toString().getBytes());
                         break;
                     case MULTICAST_ACK:
-                        handleMulticastAck(bytes);
+                        handleMulticastAck(nextJSONObject.toString().getBytes());
                         break;
                 }
-                expectedSequence++;
-                sequenceMap.put(senderId, expectedSequence);
-                while (!buffer.get(senderId).isEmpty() && buffer.get(senderId).peek().senderSequence == expectedSequence) {
-                    Message nextMessage = buffer.get(senderId).poll();
-                    byte[] nextBytes = nextMessage.content;
-                    MessageType nextType = getMessageType(nextBytes);
-                    switch (nextType) {
-                        case MULTICAST_UPDATE:
-                            handleMulticastUpdate(nextBytes);
-                            break;
-                        case MULTICAST_ACK:
-                            handleMulticastAck(nextBytes);
-                            break;
-                    }
-                    expectedSequence++;
-                    sequenceMap.put(senderId, expectedSequence);
-                }
-
+                sequenceMap.put(senderID, sequenceMap.get(senderID) + 1);
             }
         } catch (JSONException e) {
             // e.printStackTrace();
         }
-
-        // switch (type) {
-        // case MULTICAST_UPDATE:
-        // handleMulticastUpdate(bytes);
-        // break;
-        // case MULTICAST_ACK:
-        // handleMulticastAck(bytes);
-        // break;
-        // }
     }
 
     private void handleMulticastUpdate(byte[] bytes) {
@@ -203,13 +232,15 @@ public class MyDBReplicatedServer extends SingleServer {
 
         int tsAck = lamportClock.incrementAndGet();
         // multicast acknowledgment to all nodes
-        for (String node : this.serverMessenger.getNodeConfig().getNodeIDs())
+        for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
             // if (!node.equals(myID)) multicast to all nodes including itself
             try {
                 this.serverMessenger.send(node, createAckMessage(message.content, tsAck, messageID));
             } catch (IOException e) {
                 e.printStackTrace();
             }
+        }
+        sequence.getAndIncrement();
     }
 
     private void handleMulticastAck(byte[] bytes) {
@@ -253,7 +284,7 @@ public class MyDBReplicatedServer extends SingleServer {
     private void deliver(Message message) {
         String command = new String(message.content);
         session.execute(command);
-        log.log(Level.INFO, "Delivered message with timestamp {0}", message.timestamp);
+        // log.log(Level.INFO, "Delivered message with timestamp {0}", message.timestamp);
     }
 
     private MessageType getMessageType(byte[] bytes) {
@@ -274,7 +305,9 @@ public class MyDBReplicatedServer extends SingleServer {
             jsonObject.put("timestamp", timestamp);
             jsonObject.put("messageID", messageID);
             jsonObject.put("senderID", myID);
-            jsonObject.put("sequenceNumber", sequence.getAndIncrement());
+            jsonObject.put("sequenceNumber", sequence.get());
+            // jsonObject.put("sequenceNumber", sequence.getAndIncrement());
+
             return jsonObject.toString().getBytes();
         } catch (JSONException e) {
             // e.printStackTrace();
@@ -290,7 +323,8 @@ public class MyDBReplicatedServer extends SingleServer {
             jsonObject.put("timestamp", timestamp);
             jsonObject.put("messageID", messageID);
             jsonObject.put("senderID", myID);
-            jsonObject.put("sequenceNumber", sequence.getAndIncrement());
+            jsonObject.put("sequenceNumber", sequence.get());
+            // jsonObject.put("sequenceNumber", sequence.getAndIncrement());
             return jsonObject.toString().getBytes();
         } catch (JSONException e) {
             // e.printStackTrace();

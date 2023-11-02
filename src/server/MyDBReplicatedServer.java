@@ -68,7 +68,7 @@ public class MyDBReplicatedServer extends SingleServer {
         this.cluster = Cluster.builder().addContactPoint(isaDB.getHostName()).withPort(isaDB.getPort()).build();
         this.session = cluster.connect(myID);
 
-        // initialize the sequence map
+        // initialize the sequence map - MOVE DOWNNNNNN!!!!!!
         for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
             // if (!node.equals(myID))
             sequenceMap.put(node, 0);

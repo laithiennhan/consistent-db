@@ -320,9 +320,9 @@ public class GraderSingleServer extends DefaultTest {
             }
 			if(!match) break;
         }
-        Assert.assertTrue(message, nonEmpty && match);
         for(i=0; i<results.length; i++)
             System.out.println(i+":"+results[i]);
+        Assert.assertTrue(message, nonEmpty && match);
     }
 
 	protected void verifyOrderConsistent(String table, int key) {

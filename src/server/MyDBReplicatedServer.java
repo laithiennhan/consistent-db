@@ -68,7 +68,7 @@ public class MyDBReplicatedServer extends SingleServer {
         this.cluster = Cluster.builder().addContactPoint(isaDB.getHostName()).withPort(isaDB.getPort()).build();
         this.session = cluster.connect(myID);
 
-        // initialize the sequence map - MOVE DOWNNNNNN!!!!!!
+        // initialize the sequence map
         for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
             // if (!node.equals(myID))
             sequenceMap.put(node, 0);
@@ -101,21 +101,25 @@ public class MyDBReplicatedServer extends SingleServer {
         String uniqueID = UUID.randomUUID().toString();
         ackMap.put(uniqueID, 0); // Acknowledgment from this server
         // multicast the update to all other servers
-        for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
-            // if (!node.equals(myID))
-            try {
-                this.serverMessenger.send(node, createMulticastMessage(bytes, ts, uniqueID));
-            } catch (IOException e) {
-                e.printStackTrace();
+        synchronized (sequence) {
+            for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
+                // if (!node.equals(myID))
+                try {
+                    this.serverMessenger.send(node, createMulticastMessage(bytes, ts, uniqueID));
+                    log.log(Level.INFO, "Receiver {0}",
+                            new Object[] { node }); // simply log
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
+            sequence.getAndIncrement();
         }
-        sequence.getAndIncrement();
     }
 
     // TODO: process bytes received from servers here
     protected void handleMessageFromServer(byte[] bytes, NIOHeader header) {
-        log.log(Level.INFO, "At hmfs, {0} received relayed message from {1}",
-                new Object[] { this.myID, header.sndr }); // simply log
+        // log.log(Level.INFO, "At hmfs, {0} received relayed message from {1}",
+        //         new Object[] { this.myID, header.sndr }); // simply log
 
         MessageType type = getMessageType(bytes);
         int senderSequence;
@@ -128,7 +132,7 @@ public class MyDBReplicatedServer extends SingleServer {
             senderID = jsonObject.getString("senderID");
             int receivedTimestamp = jsonObject.getInt("timestamp");
             String messageID = jsonObject.getString("messageID");
-            int expectedSequence = sequenceMap.get(senderID);
+            // int expectedSequence = sequenceMap.get(senderID);
             byte[] payload = jsonObject.getString("payload").getBytes();
             // String uniqueID = jsonObject.getString("uniqueID");
             // log.log(Level.INFO, "Sender Sequence: {0}, Expected sequence: {1}, SenderID: {2}, MyID: {3}",
@@ -180,6 +184,12 @@ public class MyDBReplicatedServer extends SingleServer {
             message.senderSequence = senderSequence;
             message.uniqueID = messageID;
             message.type = type;
+            // if (!sequenceMap.containsKey(senderID)) {
+            //     sequenceMap.put(senderID, 0);
+            // }
+            // if (!buffer.containsKey(senderID)) {
+            //     buffer.put(senderID, new PriorityBlockingQueue<Message>());
+            // }
             buffer.get(senderID).add(message);
 
             while (!buffer.get(senderID).isEmpty() && buffer.get(senderID).peek().senderSequence == sequenceMap.get(senderID)) {
@@ -218,7 +228,7 @@ public class MyDBReplicatedServer extends SingleServer {
             // e.printStackTrace();
         }
 
-        lamportClock.set(Math.max(lamportClock.get(), receivedTimestamp + 1)); // ?
+        lamportClock.set(Math.max(lamportClock.get(), receivedTimestamp) + 1); // ?
 
         Message message = new Message();
         try {
@@ -232,15 +242,19 @@ public class MyDBReplicatedServer extends SingleServer {
 
         int tsAck = lamportClock.incrementAndGet();
         // multicast acknowledgment to all nodes
-        for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
-            // if (!node.equals(myID)) multicast to all nodes including itself
-            try {
-                this.serverMessenger.send(node, createAckMessage(message.content, tsAck, messageID));
-            } catch (IOException e) {
-                e.printStackTrace();
+        synchronized (sequence) {
+            for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
+                // if (!node.equals(myID)) multicast to all nodes including itself
+                try {
+                    this.serverMessenger.send(node, createAckMessage(message.content, tsAck, messageID));
+                    log.log(Level.INFO, "Receiver {0}",
+                            new Object[] { node }); // simply log
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
+            sequence.getAndIncrement();
         }
-        sequence.getAndIncrement();
     }
 
     private void handleMulticastAck(byte[] bytes) {
@@ -253,7 +267,7 @@ public class MyDBReplicatedServer extends SingleServer {
             // e.printStackTrace();
         }
 
-        lamportClock.set(Math.max(lamportClock.get(), receivedTimestamp + 1));
+        lamportClock.set(Math.max(lamportClock.get(), receivedTimestamp) + 1);
 
         // String originalMessage = "";
         String messageID = "";
@@ -278,6 +292,8 @@ public class MyDBReplicatedServer extends SingleServer {
         // String originalMessage = new String(message.content);
         String messageID = message.uniqueID;
         int ackCount = ackMap.getOrDefault(messageID, 0);
+        // log.log(Level.INFO, "Number of nodes {0}",
+        //         new Object[] { this.serverMessenger.getNodeConfig().getNodeIDs().size() }); // simply log
         return ackCount == this.serverMessenger.getNodeConfig().getNodeIDs().size();
     }
 
@@ -306,6 +322,8 @@ public class MyDBReplicatedServer extends SingleServer {
             jsonObject.put("messageID", messageID);
             jsonObject.put("senderID", myID);
             jsonObject.put("sequenceNumber", sequence.get());
+            log.log(Level.INFO, "messageID {0}, sequenceNumber {1}, senderID {2}, type {3}",
+                    new Object[] { messageID, sequence.get(), myID, MessageType.MULTICAST_UPDATE.toString() }); // simply log
             // jsonObject.put("sequenceNumber", sequence.getAndIncrement());
 
             return jsonObject.toString().getBytes();
@@ -324,6 +342,8 @@ public class MyDBReplicatedServer extends SingleServer {
             jsonObject.put("messageID", messageID);
             jsonObject.put("senderID", myID);
             jsonObject.put("sequenceNumber", sequence.get());
+            log.log(Level.INFO, "messageID {0}, sequenceNumber {1}, senderID {2}, type {3}",
+                    new Object[] { messageID, sequence.get(), myID, MessageType.MULTICAST_ACK.toString() }); // simply log
             // jsonObject.put("sequenceNumber", sequence.getAndIncrement());
             return jsonObject.toString().getBytes();
         } catch (JSONException e) {

@@ -211,9 +211,15 @@ public class Grader extends GraderSingleServer {
 
         verifyOrderConsistent(DEFAULT_TABLE_NAME, key);
     }
+    /**
+     * Compared to the previous test, this test checks also for reliability,
+     * i.e., all issued requests were completed.
+     * @throws InterruptedException
+     * @throws IOException
+     */
 
     /**
-     * This test will not sleep and send more requests (i.e., 10)
+     * This test will not sleep and send more requests faster.
      *
      * @throws InterruptedException
      * @throws IOException
@@ -237,6 +243,27 @@ public class Grader extends GraderSingleServer {
         Thread.sleep(SLEEP * NUM_REQS / SLEEP_RATIO);
 
         verifyOrderConsistent(DEFAULT_TABLE_NAME, key);
+    }
+
+    @Test
+    public void test17_UpdateRecordFastest_RandomServer_Reliably() throws InterruptedException, IOException {
+        // generate a random key for this test
+        int key = ThreadLocalRandom.current().nextInt();
+
+        // insert a record first with an empty list, it doesn't matter which server we use, it should be consistent
+        client.send(serverMap.get(servers[0]), insertRecordIntoTableCmd(key, DEFAULT_TABLE_NAME));
+        // this sleep is to guarantee that the record has been created
+        Thread.sleep(SLEEP);
+
+        for (int i = 0; i < NUM_REQS; i++) {
+            String node = servers[ThreadLocalRandom.current().nextInt(0, servers.length)];
+            client.send(serverMap.get(node), updateRecordOfTableCmd(key, DEFAULT_TABLE_NAME));
+
+        }
+
+        Thread.sleep(SLEEP * NUM_REQS / SLEEP_RATIO);
+
+        verifyOrderConsistent(DEFAULT_TABLE_NAME, key, true, NUM_REQS);
     }
 
     @AfterClass

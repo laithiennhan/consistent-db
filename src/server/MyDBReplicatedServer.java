@@ -30,11 +30,11 @@ public class MyDBReplicatedServer extends SingleServer {
     final private Cluster cluster;
     private final AtomicInteger lamportClock = new AtomicInteger(0);
     private final PriorityBlockingQueue<Message> queue = new PriorityBlockingQueue<>();
-    private final Map<String, Integer> ackMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Integer> ackMap = new ConcurrentHashMap<>();
     // key: sender node id, value: expected seq
-    private final Map<String, Integer> sequenceMap = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Integer> sequenceMap = new ConcurrentHashMap<>();
     // store commands yet to be executed
-    private final Map<String, PriorityBlockingQueue<Message>> buffer = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, PriorityBlockingQueue<Message>> buffer = new ConcurrentHashMap<>();
     // sequence number currently in this node:
     private final AtomicInteger sequence = new AtomicInteger(0);
 
@@ -118,8 +118,8 @@ public class MyDBReplicatedServer extends SingleServer {
 
     // TODO: process bytes received from servers here
     protected void handleMessageFromServer(byte[] bytes, NIOHeader header) {
-        // log.log(Level.INFO, "At hmfs, {0} received relayed message from {1}",
-        //         new Object[] { this.myID, header.sndr }); // simply log
+        log.log(Level.INFO, "At hmfs, {0} received relayed message from {1}",
+                new Object[] { this.myID, header.sndr }); // simply log
 
         MessageType type = getMessageType(bytes);
         int senderSequence;
@@ -134,49 +134,6 @@ public class MyDBReplicatedServer extends SingleServer {
             String messageID = jsonObject.getString("messageID");
             // int expectedSequence = sequenceMap.get(senderID);
             byte[] payload = jsonObject.getString("payload").getBytes();
-            // String uniqueID = jsonObject.getString("uniqueID");
-            // log.log(Level.INFO, "Sender Sequence: {0}, Expected sequence: {1}, SenderID: {2}, MyID: {3}",
-            //         new Object[] { senderSequence, expectedSequence, senderID, myID}); // simply log
-            // if (senderSequence != expectedSequence) {
-            //     Message message = new Message();
-            //     message.content = payload;
-            //     message.timestamp = receivedTimestamp;
-            //     message.senderSequence = senderSequence;
-            //     message.uniqueID = messageID;
-            //     message.type = type;
-            //     buffer.get(senderID).add(message);
-            // } else {
-            //     switch (type) {
-            //         case MULTICAST_UPDATE:
-            //             handleMulticastUpdate(bytes);
-            //             break;
-            //         case MULTICAST_ACK:
-            //             handleMulticastAck(bytes);
-            //             break;
-            //     }
-            //     expectedSequence++;
-            //     sequenceMap.put(senderID, expectedSequence);
-            //     while (!buffer.get(senderID).isEmpty() && buffer.get(senderID).peek().senderSequence == expectedSequence) {
-            //         Message nextMessage = buffer.get(senderID).poll();
-            //         // byte[] nextBytes = nextMessage.content;
-            //         // MessageType nextType = getMessageType(nextBytes);
-            //         JSONObject nextJSONObject = new JSONObject();
-            //         nextJSONObject.put("type", nextMessage.type.toString());
-            //         nextJSONObject.put("payload", new String(nextMessage.content));
-            //         nextJSONObject.put("timestamp", nextMessage.timestamp);
-            //         nextJSONObject.put("messageID", nextMessage.uniqueID);
-            //         switch (nextMessage.type) {
-            //             case MULTICAST_UPDATE:
-            //                 handleMulticastUpdate(nextJSONObject.toString().getBytes());
-            //                 break;
-            //             case MULTICAST_ACK:
-            //                 handleMulticastAck(nextJSONObject.toString().getBytes());
-            //                 break;
-            //         }
-            //         expectedSequence++;
-            //         sequenceMap.put(senderID, expectedSequence);
-            //     }
-            // }
 
             Message message = new Message();
             message.content = payload;
@@ -184,12 +141,7 @@ public class MyDBReplicatedServer extends SingleServer {
             message.senderSequence = senderSequence;
             message.uniqueID = messageID;
             message.type = type;
-            // if (!sequenceMap.containsKey(senderID)) {
-            //     sequenceMap.put(senderID, 0);
-            // }
-            // if (!buffer.containsKey(senderID)) {
-            //     buffer.put(senderID, new PriorityBlockingQueue<Message>());
-            // }
+
             buffer.get(senderID).add(message);
 
             while (!buffer.get(senderID).isEmpty() && buffer.get(senderID).peek().senderSequence == sequenceMap.get(senderID)) {
@@ -240,7 +192,7 @@ public class MyDBReplicatedServer extends SingleServer {
         message.uniqueID = messageID;
         queue.add(message);
 
-        int tsAck = lamportClock.incrementAndGet();
+        int tsAck = lamportClock.getAndIncrement();
         // multicast acknowledgment to all nodes
         synchronized (sequence) {
             for (String node : this.serverMessenger.getNodeConfig().getNodeIDs()) {
@@ -298,6 +250,7 @@ public class MyDBReplicatedServer extends SingleServer {
     }
 
     private void deliver(Message message) {
+        lamportClock.incrementAndGet();
         String command = new String(message.content);
         session.execute(command);
         // log.log(Level.INFO, "Delivered message with timestamp {0}", message.timestamp);

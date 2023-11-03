@@ -4,6 +4,7 @@ import com.datastax.driver.core.Cluster;
 import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.Row;
 import com.datastax.driver.core.Session;
+import com.gradescope.jh61b.grader.GradedTest;
 import edu.umass.cs.nio.interfaces.NodeConfig;
 import edu.umass.cs.nio.nioutils.NIOHeader;
 import edu.umass.cs.nio.nioutils.NodeConfigUtils;
@@ -20,8 +21,12 @@ import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 @FixMethodOrder(org.junit.runners.MethodSorters.NAME_ASCENDING)
 public class GraderSingleServer extends DefaultTest {
@@ -90,6 +95,7 @@ public class GraderSingleServer extends DefaultTest {
      * @throws InterruptedException
      */
     @Test
+    @GradedTest(name = "test01_DefaultAsync()", max_score = 10)
     public void test01_DefaultAsync() throws IOException,
             InterruptedException {
         client.send(DEFAULT_SADDR, "select table_name from system_schema" +
@@ -105,6 +111,7 @@ public class GraderSingleServer extends DefaultTest {
      * @throws InterruptedException
      */
     @Test
+    @GradedTest(name = "test02_Single_CreateTable_Async()", max_score = 10)
     public void test02_Single_CreateTable_Async() throws IOException,
             InterruptedException {
         dropTableIfExists();
@@ -122,6 +129,7 @@ public class GraderSingleServer extends DefaultTest {
      * @throws InterruptedException
      */
     @Test
+    @GradedTest(name = "test03_InsertRecords_Async()", max_score = 10)
     public void test03_InsertRecords_Async() throws IOException, InterruptedException {
         int numInserts = 10;
         clearTableRecords();
@@ -142,6 +150,7 @@ public class GraderSingleServer extends DefaultTest {
      * @throws InterruptedException
      */
     @Test
+    @GradedTest(name = "test04_DeleteRecords_Async()", max_score = 10)
     public void test04_DeleteRecords_Async() throws IOException, InterruptedException {
         send("truncate users", true);
         Thread.sleep(SLEEP);
@@ -161,15 +170,54 @@ public class GraderSingleServer extends DefaultTest {
      * @throws InterruptedException
      */
     @Test
+    @GradedTest(name = "test05_CreateTable_Sync()", max_score = 10)
     public void test05_CreateTable_Sync() throws IOException, InterruptedException {
+        // executing directly as opposed to sending via the client ensures
+        // that the drop table command doesn't get reordered and executed
+        // after the create.
         session.execute(getDropTableCmd(TABLE, DEFAULT_KEYSPACE));
         testCreateTable(true, false);
     }
 
+    @Test
+    @GradedTest(name = "test06_MultipleOperations_Sync()", max_score = 10)
+    public void test06_MultipleOperations_Sync() throws IOException,
+            InterruptedException {
+        session.execute(getCreateTableCmd(TABLE, DEFAULT_KEYSPACE));
+
+        // add records
+        int numInserts = 10;
+        clearTableRecords();
+
+        ScheduledThreadPoolExecutor executor =
+                new ScheduledThreadPoolExecutor(numInserts);
+        for (int i = 0; i < numInserts; i++) {
+            final int j = i;
+            // wait and check
+            executor.execute(new Runnable() {
+                public void run() {
+                    try {
+                        int ssn = (int) (Math.random() * Integer.MAX_VALUE);
+                        waitResponse(callbackSend(DEFAULT_SADDR, "insert into "
+                                + DEFAULT_KEYSPACE + "." + TABLE + " " +
+                                "(ssn, " + "firstname, " + "lastname) " +
+                                "values (" + ssn + ", '" + "John" + j + "', " +
+                                "'" + "Smith" + j + "')"));
+                        ResultSet results = session.execute("select ssn from "
+                                + TABLE + " " + "where " + "ssn=" + ssn);
+                        Assert.assertTrue(results.one().getInt(0) == ssn);
+                    } catch (IOException ioe) {
+                        ioe.printStackTrace();
+                    }
+                }
+            });
+        }
+        while(!outstanding.isEmpty());
+        clearTableRecords();
+        executor.shutdown();
+    }
 
 
-
-    // The cleanup tests below will always succceed.
 
 
     protected void testCreateTable(boolean single, boolean sleep) throws
@@ -215,32 +263,73 @@ public class GraderSingleServer extends DefaultTest {
         Assert.assertTrue(match);
     }
 
-    protected void verifyOrderConsistent(String table, int key) {
-        String[] results = new String[servers.length];
+    protected void verifyOrderConsistent(String table, int key,
+										 boolean strict, int numExpected) {
+        ArrayList<Integer>[] results = new ArrayList[servers.length];
         int i = 0;
         boolean nonEmpty = false;
         for (String node : servers) {
             ResultSet result = session.execute(readResultFromTableCmd(key, DEFAULT_TABLE_NAME, node));
-            results[i] = "";
+            results[i] = new ArrayList<Integer>();
             for (Row row : result) {
-                results[i] += row;
+                results[i] = new ArrayList<Integer>(row.getList("events",
+                        Integer.class));
                 nonEmpty = true;
             }
             i++;
         }
+
+        i=0;
+        int longestListIndex = 0;
+        int longestListSize = 0;
+        for(int j=0; j<results.length; j++) {
+            if(results[j].size() > longestListSize) {
+				longestListIndex = j;
+				longestListSize = results[j].size();
+			}
+        }
+
         i = 0;
         boolean match = true;
-        for (String result : results) {
-            if (!results[0].equals(result))
-                match = false;
+		String message="[\n";
+        for (ArrayList<Integer> result : results) {
+            for(i=0; i<result.size(); i++){
+				// prefix match
+                if (!result.get(i).equals(results[longestListIndex].get(i))) {
+					match = false;
+					message += result + "\n!=(prefix mismatch at location " + i +
+				": " + result.get(i) + "!=" + results[longestListIndex].get(i) +
+							")\n" + results[longestListIndex] +")\n";
+					break;
+				}
+				// prefix match and sequence size match
+				if(strict && result.size() != results[longestListIndex].size()) {
+					match = false;
+					message += "result size " + result.size() + "   !=  " +
+						"longestSize=" + results[longestListIndex].size() + "\n";
+					break;
+				}
+				// prefix match and sequence size == numExpected
+				if(strict && numExpected > 0 && result.size() != numExpected) {
+					match = false;
+					message += "result size " + result.size() + "  !=  " +
+						"numExpected " + numExpected + "\n";
+					break;
+				}
+
+            }
+			if(!match) break;
         }
-        Assert.assertTrue(nonEmpty && match);
+        Assert.assertTrue(message, nonEmpty && match);
         for(i=0; i<results.length; i++)
             System.out.println(i+":"+results[i]);
-
     }
 
-    protected void testCreateTableSleep(boolean single) throws
+	protected void verifyOrderConsistent(String table, int key) {
+		this.verifyOrderConsistent(table, key, false, 0);
+	}
+
+		protected void testCreateTableSleep(boolean single) throws
             InterruptedException, IOException {
         send(getDropTableCmd(TABLE, DEFAULT_KEYSPACE), single);
         Thread.sleep(SLEEP);
